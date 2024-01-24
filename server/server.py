@@ -1,3 +1,4 @@
+import importlib
 import logging
 import queue
 import socket
@@ -16,6 +17,8 @@ class SockServer:
         self.__addr = (addr, port)
         self.__logger = self.__set_logger()
         self.__server_socket = self.__create_socket()
+        self.__threads = []
+        self.__shutdown_flag = False
 
     @property
     def log(self):
@@ -42,25 +45,31 @@ class SockServer:
         server_socket.listen()
         return server_socket
 
-    def start_serving(self):
+    def shutdown(self):
+        self.__shutdown_flag = True
+
+        for thr in self.__threads:
+            thr.join()
+
+    def start_serving(self, q: queue.Queue):
         with self.__server_socket as soc:
             self.log.info('Server started on http://%s:%s' % self.__addr)
 
-            threads = []
-            try:
-                while True:
-                    con, addr = soc.accept()
-                    addr: tuple
-                    if con is not None:
-                        self.log.info('Received connection from %s:%s address.' % addr)
-                        thr = threading.Thread(target=self.__handle_client, args=(con,))
-                        threads.append(thr)
-                        thr.start()
-            except KeyboardInterrupt:
-                self.log.info('Server interrupted by user.')
-            finally:
-                for thr in threads:
-                    thr.join()
+            while not self.__shutdown_flag:
+                sg = q.get()
+                if sg:
+                    self.log.info('Shutdown signal received. Shutting down...')
+                    break
+
+                con, addr = soc.accept()
+                addr: tuple
+                if con is not None:
+                    self.log.info('Received connection from %s:%s address.' % addr)
+                    thr = threading.Thread(target=self.__handle_client, args=(con,))
+                    thr.start()
+                    self.__threads.append(thr)
+
+            self.log.info('Server stopped.')
 
     @staticmethod
     def __handle_client(connection):
@@ -83,14 +92,11 @@ class FSObserver:
     BASE_DIR = pathlib.Path().resolve()
     OBSERVER = None
 
-    def __init__(self, reload_queue: queue.Queue):
-        self.__reload_queue = reload_queue
-
-    def start_observer(self):
+    def start_observer(self, q: queue.Queue):
         if self.OBSERVER is None or not self.OBSERVER.is_alive():
             self.OBSERVER = Observer()
             self.OBSERVER.schedule(
-                ServerFileHandler(self.__reload_queue),
+                ServerFileHandler(q),
                 path=str(self.BASE_DIR),
                 recursive=True,
             )
@@ -111,30 +117,44 @@ class ServerFileHandler(FileSystemEventHandler):
     def on_any_event(self, event):
         if event.is_directory:
             return
-
         self.__reload_queue.put(True)
 
 
 class Adapter:
-    def __init__(self, reload_queue: queue.Queue):
-        self.__q = reload_queue
 
-    def fetch_signal(self):
-        while self.__q.empty():
-            sg = self.__q.get()
+    @staticmethod
+    def fetch_signal(q: queue.Queue):
+        while q.empty():
+            sg = q.get()
             if sg:
-                return True
+                print(1)
+                print(1)
+                return sg
+
+
+def main():
+    adapter_q = queue.Queue()
+    server_q = queue.Queue()
+
+    server = SockServer('127.0.0.1', 9999)
+
+    observer = FSObserver()
+    observer.start_observer(adapter_q)
+
+    thr_server = threading.Thread(target=server.start_serving, args=(server_q,), daemon=True)
+    thr_server.start()
+
+    thr_adapt = threading.Thread(target=Adapter().fetch_signal, args=(adapter_q,), daemon=True)
+    thr_adapt.start()
+    thr_adapt.join()
+
+    if not thr_adapt.is_alive():
+        server_q.put_nowait(True)
+        server.shutdown()
+        server_module = importlib.import_module('server')
+        importlib.reload(server_module)
+        main()
 
 
 if __name__ == '__main__':
-    q = queue.Queue()
-
-    obs = FSObserver(q)
-    obs.start_observer()
-
-    if q.empty():
-        server = SockServer('127.0.0.1', 9999)
-        server.start_serving()
-    else:
-        print('reloading')
-        print('reloading')
+    main()
