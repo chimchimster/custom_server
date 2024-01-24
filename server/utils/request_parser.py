@@ -1,6 +1,7 @@
 import re
 
 from .exc import *
+from .request_obj import RequestObj
 
 
 class RequestParser:
@@ -10,12 +11,13 @@ class RequestParser:
     def parse_http_request(self) -> dict:
 
         try:
-            return {
-                'method': self.__parse_method(),
-                'route': self.__parse_route(),
-                'proto': self.__parse_proto(),
-                **self.__parse_headers(),
-            }
+
+            method_name = self.__parse_method()
+            route = self.__parse_route()
+            proto = self.__parse_proto()
+            headers = self.__parse_headers()
+            return RequestObj(method_name, route, proto, **headers)
+
         except (InvalidRequest, InvalidHttpMethod, InvalidProtocol, InvalidRoute):
             return {
                 'status_code': 400,
