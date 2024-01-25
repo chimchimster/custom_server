@@ -1,11 +1,12 @@
+import os
 import importlib
 import logging
+import pdb
 import queue
 import socket
 import pathlib
 import sys
 import threading
-import time
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -15,10 +16,12 @@ from utils import RequestParser
 
 class SockServer:
 
-    def __init__(self, addr: str, port: int):
+    def __init__(self, addr: str, port: int, event):
         self.__addr = (addr, port)
         self.__logger = self.__set_logger()
         self.__server_socket = self.__create_socket()
+        self.__reload_event = event
+        self.__con_events = []
 
     @property
     def log(self):
@@ -45,39 +48,50 @@ class SockServer:
         server_socket.listen()
         return server_socket
 
-    def shutdown(self, q: queue.Queue):
-
+    def shutdown(self):
         self.log.info('Shutting server down...')
 
-        q.put_nowait(True)
+        for con_event in self.__con_events:
+            con_event.set()
+
+        self.__server_socket.close()
+        self.__reload_event.set()
+
+        for thr_con in threading.enumerate():
+            if not isinstance(thr_con, threading._MainThread) and thr_con.is_alive():
+                thr_con.join()
+
+        self.log.info('Server shut down.')
 
     def __accept_connection(self, soc: socket.socket):
-        try:
-            con, addr = soc.accept()
-            addr: tuple
-            if con is not None:
-                self.log.info('Received connection from %s:%s address.' % addr)
-                threading.Thread(target=self.__handle_client, args=(con,)).start()
-        except BlockingIOError:
-            pass
 
-    def start_serving(self, q: queue.Queue):
+        con, addr = soc.accept()
+        addr: tuple
+
+        if con is not None:
+            self.log.info('Received connection from %s:%s address.' % addr)
+
+            con_event = threading.Event()
+            thr_con = threading.Thread(target=self.__handle_client, args=(con, con_event))
+            self.__con_events.append(con_event)
+            thr_con.start()
+
+
+    def start_serving(self):
         self.log.info('Server started on http://%s:%s' % self.__addr)
 
         with self.__server_socket as soc:
-            soc.setblocking(False)
-            while q.empty():
+            while not self.__reload_event.is_set():
                 self.__accept_connection(soc)
 
-        self.log.info('Server stopped.')
 
     @staticmethod
-    def __handle_client(connection):
+    def __handle_client(connection, con_event):
 
         try:
             while True:
                 data = connection.recv(1024)
-                if not data:
+                if not data or not con_event.is_set():
                     break
                 else:
                     decoded_data = data.decode('utf-8')
@@ -93,11 +107,11 @@ class FSObserver:
     BASE_DIR = pathlib.Path().resolve()
     OBSERVER = None
 
-    def start_observer(self, q: queue.Queue):
+    def start_observer(self, event: threading.Event):
         if self.OBSERVER is None or not self.OBSERVER.is_alive():
             self.OBSERVER = Observer()
             self.OBSERVER.schedule(
-                ServerFileHandler(q),
+                ServerFileHandler(event),
                 path=str(self.BASE_DIR),
                 recursive=True,
             )
@@ -112,59 +126,57 @@ class FSObserver:
 
 class ServerFileHandler(FileSystemEventHandler):
 
-    def __init__(self, reload_queue: queue.Queue):
-        self.__reload_queue = reload_queue
+    def __init__(self, event: threading.Event):
+        self.__event = event
 
     def on_any_event(self, event):
         if event.is_directory:
             return
-        self.__reload_queue.put(True)
+        self.__event.set()
 
 
 class Adapter:
 
     @staticmethod
-    def fetch_signal(q: queue.Queue):
-        while q.empty():
-            if not q.empty():
-                break
+    def fetch_signal(event: threading.Event):
+        while not event.is_set():
+            if event.is_set():
+                return
 
 
 def main():
 
-    serving_q = queue.Queue()
-    adapter_q = queue.Queue()
+    adapter_event = threading.Event()
+    reload_event = threading.Event()
 
     observer = FSObserver()
-    observer.start_observer(adapter_q)
+    observer.start_observer(adapter_event)
 
-    server = SockServer('127.0.0.1', 9999)
+    server = SockServer('127.0.0.1', 9999, reload_event)
 
-    thread_local_server = threading.local()
-    thread_local_server.server = server
 
-    thr_server = threading.Thread(target=thread_local_server.server.start_serving, args=(serving_q,))
+    thr_server = threading.Thread(target=server.start_serving, daemon=True)
     thr_server.start()
 
-    thr_adapt = threading.Thread(target=Adapter().fetch_signal, args=(adapter_q,))
+    thr_adapt = threading.Thread(target=Adapter().fetch_signal, args=(adapter_event,))
     thr_adapt.start()
     thr_adapt.join()
 
     if not thr_adapt.is_alive():
-        thread_local_server.server.shutdown(serving_q)
-        thr_server.join()
-        server_module = importlib.import_module('server')
-        importlib.reload(server_module)
-        return
+        reload_event.set()
+        server.shutdown()
+        # thr_server.join()
+        main_modname = os.path.basename(__file__)[:-3]
+        module = importlib.import_module(main_modname)
+        importlib.reload(module)
+        globals().update(vars(module))
 
 
 if __name__ == '__main__':
 
     try:
         while True:
-            main_thread = threading.Thread(target=main)
-            main_thread.start()
-            main_thread.join()
+            main()
     except KeyboardInterrupt:
-        print('Program finished with status code 0. Goodbye :]')
+        print('Server is not serving anymore. Goodbye :]')
         sys.exit(0)
