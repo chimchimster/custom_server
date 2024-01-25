@@ -3,7 +3,9 @@ import logging
 import queue
 import socket
 import pathlib
+import sys
 import threading
+import time
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -17,8 +19,6 @@ class SockServer:
         self.__addr = (addr, port)
         self.__logger = self.__set_logger()
         self.__server_socket = self.__create_socket()
-        self.__threads = []
-        self.__shutdown_flag = False
 
     @property
     def log(self):
@@ -45,46 +45,47 @@ class SockServer:
         server_socket.listen()
         return server_socket
 
-    def shutdown(self):
-        self.__shutdown_flag = True
+    def shutdown(self, q: queue.Queue):
 
-        for thr in self.__threads:
-            thr.join()
+        self.log.info('Shutting server down...')
+
+        q.put_nowait(True)
+
+    def __accept_connection(self, soc: socket.socket):
+        try:
+            con, addr = soc.accept()
+            addr: tuple
+            if con is not None:
+                self.log.info('Received connection from %s:%s address.' % addr)
+                threading.Thread(target=self.__handle_client, args=(con,)).start()
+        except BlockingIOError:
+            pass
 
     def start_serving(self, q: queue.Queue):
+        self.log.info('Server started on http://%s:%s' % self.__addr)
+
         with self.__server_socket as soc:
-            self.log.info('Server started on http://%s:%s' % self.__addr)
+            soc.setblocking(False)
+            while q.empty():
+                self.__accept_connection(soc)
 
-            while not self.__shutdown_flag:
-                sg = q.get()
-                if sg:
-                    self.log.info('Shutdown signal received. Shutting down...')
-                    break
-
-                con, addr = soc.accept()
-                addr: tuple
-                if con is not None:
-                    self.log.info('Received connection from %s:%s address.' % addr)
-                    thr = threading.Thread(target=self.__handle_client, args=(con,))
-                    thr.start()
-                    self.__threads.append(thr)
-
-            self.log.info('Server stopped.')
+        self.log.info('Server stopped.')
 
     @staticmethod
     def __handle_client(connection):
 
-        while True:
-            data = connection.recv(1024)
-            if not data:
-                break
-            else:
-                decoded_data = data.decode('utf-8')
-                pars = RequestParser(decoded_data)
-                v = pars.parse_http_request()
-                print(v)
-
-        connection.close()
+        try:
+            while True:
+                data = connection.recv(1024)
+                if not data:
+                    break
+                else:
+                    decoded_data = data.decode('utf-8')
+                    pars = RequestParser(decoded_data)
+                    v = pars.parse_http_request()
+                    print(v)
+        finally:
+            connection.close()
 
 
 class FSObserver:
@@ -125,36 +126,45 @@ class Adapter:
     @staticmethod
     def fetch_signal(q: queue.Queue):
         while q.empty():
-            sg = q.get()
-            if sg:
-                print(1)
-                print(1)
-                return sg
+            if not q.empty():
+                break
 
 
 def main():
-    adapter_q = queue.Queue()
-    server_q = queue.Queue()
 
-    server = SockServer('127.0.0.1', 9999)
+    serving_q = queue.Queue()
+    adapter_q = queue.Queue()
 
     observer = FSObserver()
     observer.start_observer(adapter_q)
 
-    thr_server = threading.Thread(target=server.start_serving, args=(server_q,), daemon=True)
+    server = SockServer('127.0.0.1', 9999)
+
+    thread_local_server = threading.local()
+    thread_local_server.server = server
+
+    thr_server = threading.Thread(target=thread_local_server.server.start_serving, args=(serving_q,))
     thr_server.start()
 
-    thr_adapt = threading.Thread(target=Adapter().fetch_signal, args=(adapter_q,), daemon=True)
+    thr_adapt = threading.Thread(target=Adapter().fetch_signal, args=(adapter_q,))
     thr_adapt.start()
     thr_adapt.join()
 
     if not thr_adapt.is_alive():
-        server_q.put_nowait(True)
-        server.shutdown()
+        thread_local_server.server.shutdown(serving_q)
+        thr_server.join()
         server_module = importlib.import_module('server')
         importlib.reload(server_module)
-        main()
+        return
 
 
 if __name__ == '__main__':
-    main()
+
+    try:
+        while True:
+            main_thread = threading.Thread(target=main)
+            main_thread.start()
+            main_thread.join()
+    except KeyboardInterrupt:
+        print('Program finished with status code 0. Goodbye :]')
+        sys.exit(0)
