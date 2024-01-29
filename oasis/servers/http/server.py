@@ -6,8 +6,7 @@ import select
 from oasis.exceptions.exc import InvalidHttpMethod
 from oasis.http.request import RequestParser
 from oasis.http.request.request_obj import Request
-from oasis.route.register import REGISTERED_ROUTES
-from oasis.handlers.register.register import register_all
+from oasis.route.register import REGISTERED_ROUTES, register_all
 
 logger = logging.getLogger('Oasis Server')
 
