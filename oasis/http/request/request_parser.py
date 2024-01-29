@@ -1,14 +1,14 @@
 import re
 
-from .exc import *
-from .request_obj import RequestObj
+from oasis.exceptions.exc import *
+from oasis.http.request.request_obj import Request, BadRequest
 
 
 class RequestParser:
     def __init__(self, req_data: str):
         self.__req_data = [row.strip() for row in req_data.split('\n') if row.strip()]
 
-    def parse_http_request(self) -> dict:
+    def parse_http_request(self) -> Request | BadRequest:
 
         try:
 
@@ -16,13 +16,13 @@ class RequestParser:
             route = self.__parse_route()
             proto = self.__parse_proto()
             headers = self.__parse_headers()
-            return RequestObj(method_name, route, proto, **headers)
+            return Request(method_name=method_name, route=route, proto=proto, headers=headers)
 
         except (InvalidRequest, InvalidHttpMethod, InvalidProtocol, InvalidRoute):
-            return {
-                'status_code': 400,
-                'detail': 'Bad request.',
-            }
+            return BadRequest(
+                status_code=404,
+                detail='Bad request.'
+            )
 
     def __parse_method(self):
         if self.__req_data:

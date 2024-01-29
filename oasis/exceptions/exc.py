@@ -14,9 +14,14 @@ class InvalidProtocol(Exception):
     pass
 
 
+class TemplatesNotFound(Exception):
+    pass
+
+
 __all__ = [
     'InvalidHttpMethod',
     'InvalidRoute',
     'InvalidRequest',
     'InvalidProtocol',
+    'TemplatesNotFound',
 ]

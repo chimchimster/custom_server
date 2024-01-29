@@ -3,13 +3,20 @@ import socket
 import threading
 import select
 
-from utils import RequestParser
+from oasis.exceptions.exc import InvalidHttpMethod
+from oasis.http.request import RequestParser
+from oasis.http.request.request_obj import Request
+from oasis.route.register import REGISTERED_ROUTES
+from oasis.handlers.register.register import register_all
+
+logger = logging.getLogger('Oasis Server')
+
+register_all()
 
 
-logger = logging.getLogger('Server')
+class SimpleHttpServer:
 
-
-class SockServer:
+    allowed_methods = {'GET', 'POST', 'PUT', 'PATCH', 'DELETE'}
 
     def __init__(self, addr: str, port: int):
         self.__addr = (addr, port)
@@ -48,8 +55,7 @@ class SockServer:
                 except OSError:
                     return
 
-    @staticmethod
-    def __handle_client(connection):
+    def __handle_client(self, connection):
 
         while True:
             data = connection.recv(1024)
@@ -59,8 +65,22 @@ class SockServer:
             else:
                 decoded_data = data.decode('utf-8')
                 pars = RequestParser(decoded_data)
-                v = pars.parse_http_request()
-                print(v)
+                request_obj = pars.parse_http_request()
+                return self.__handle_request(request_obj, connection)
+
+    @classmethod
+    def __handle_request(cls, request: Request, con):
+
+        if request.method_name not in cls.allowed_methods:
+            raise InvalidHttpMethod('Method %s is not allowed.' % request.method_name)
+
+        handler = REGISTERED_ROUTES.get(request.route)
+        print(handler)
+        if handler is not None:
+            data = handler()
+            con.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n" + data)
+
+        return
 
     def shutdown(self):
 
@@ -69,13 +89,3 @@ class SockServer:
         logger.info('Server has been shut down.')
 
 
-if __name__ == '__main__':
-
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(name)s - %(message)s',
-        datefmt='%d-%B-%Y %H:%M:%S',
-    )
-
-    s = SockServer('127.0.0.1', 9999)
-    s.start_serving()
