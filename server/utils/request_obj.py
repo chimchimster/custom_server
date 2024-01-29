@@ -20,4 +20,3 @@ class RequestObj:
     ):
 
         return RequestModel(method_name=method_name, route=route, proto=proto, headers=headers)
-
