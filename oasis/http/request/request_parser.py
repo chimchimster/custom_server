@@ -1,7 +1,7 @@
 import re
 
 from oasis.exceptions.exc import *
-from oasis.http.request.request_obj import Request, BadRequest
+from oasis.http.request.request import Request, BadRequest
 
 
 class RequestParser:

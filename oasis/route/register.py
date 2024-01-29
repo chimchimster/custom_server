@@ -1,6 +1,7 @@
 import functools
 import importlib
 import logging
+import re
 
 from typing import Callable
 from functools import partial
@@ -13,13 +14,27 @@ REGISTERED_ROUTES = {}
 logger = logging.getLogger('Handlers Registration')
 
 
+def get_routing_params(route: str):
+
+    return re.findall(r'(?<=(int|str):)(\w+)', route)
+
+
+def define_routing_params(params: list):
+
+    for param_type, param_name in params:
+        pass
+
+
 def register(route='/'):
     def wrap_outter(func: Callable):
         @functools.wraps(func)
         def wrap_inner(*args, **kwargs):
+            routing_params = get_routing_params(route)
 
+            if routing_params:
+                define_routing_params(routing_params)
             REGISTERED_ROUTES[route] = partial(func, *args, **kwargs)
-
+            print(REGISTERED_ROUTES)
         return wrap_inner
 
     return wrap_outter
