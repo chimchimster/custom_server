@@ -14,8 +14,8 @@ def index(request):
     return render('index.html')
 
 
-@register(route='/index/<int:id>/')
-def index_for_id(request):
+@register(route='/index/<int>/')
+def index_for_id(request, some_id):
 
     return render('index.html')
 

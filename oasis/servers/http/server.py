@@ -6,10 +6,9 @@ import select
 from oasis.exceptions.exc import InvalidHttpMethod
 from oasis.http.request import RequestParser
 from oasis.http.request.request import Request
-from oasis.route.register import REGISTERED_ROUTES, register_all
+from oasis.route.register import REGISTERED_ROUTES, register_all, find_route
 
 logger = logging.getLogger('Oasis Server')
-
 register_all()
 
 
@@ -75,11 +74,17 @@ class SimpleHttpServer:
 
         request.validate()
 
-        handler = REGISTERED_ROUTES.get(request.route)
+        route_found = find_route(request.route)
 
-        if handler is not None:
-            data = handler(request)
-            con.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n" + data)
+        if route_found:
+
+            route, args = route_found
+
+            handler = REGISTERED_ROUTES.get(route)
+
+            if handler is not None:
+                data = handler(request, *args)
+                con.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n" + data)
 
         return
 
